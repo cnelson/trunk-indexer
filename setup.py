@@ -23,7 +23,9 @@ setup(
     packages=find_packages(),
 
     install_requires=[
-        'fiona'
+        'fiona',
+        'shapely',
+        'colorama'
     ],
 
     test_suite='trunkindexer.tests',

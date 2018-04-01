@@ -23,9 +23,12 @@ setup(
     packages=find_packages(),
 
     install_requires=[
+        'colorama',
+        'elasticsearch',
         'fiona',
+        "pytz",
         'shapely',
-        'colorama'
+        "tzlocal"
     ],
 
     test_suite='trunkindexer.tests',

@@ -1,11 +1,91 @@
+from unittest.mock import patch
 import os
 import shutil
 import tempfile
 import unittest
 
-from trunkindexer.gis import GIS, Street
+from elasticsearch import ElasticsearchException
 
-FIXTURES_DIR = os.path.join(os.path.dirname(__file__), 'fixtures')
+from trunkindexer.gis import GIS, Street
+from trunkindexer.storage import Call, Elasticsearch
+
+GIS_FIXTURES = os.path.join(os.path.dirname(__file__), 'fixtures', 'gis')
+CALL_FIXTURES = os.path.join(os.path.dirname(__file__), 'fixtures', 'calls')
+
+
+@patch('trunkindexer.storage.elasticsearch.Elasticsearch')
+class TestElastic(unittest.TestCase):
+
+    def test_elastic_bad(self, es):
+        """RuntimeError is raised if elastic cannot be reached"""
+
+        es.side_effect = ElasticsearchException('Lol')
+
+        with self.assertRaises(RuntimeError):
+            Elasticsearch(['foo'])
+
+    def test_elastic_bad_put(self, es):
+        """RuntimeError is raised if elastic cannot store a Document"""
+
+        es().index.side_effect = ElasticsearchException('Lol')
+
+        e = Elasticsearch(['foo'])
+
+        with self.assertRaises(RuntimeError):
+            e.put(Call(os.path.join(CALL_FIXTURES, 'sample.wav')))
+
+    def test_elastic_good_put(self, es):
+        """Valid Documents are stored"""
+
+        es().indices.side_effect = ElasticsearchException('Lol')
+
+        e = Elasticsearch(['foo'])
+        c = Call(os.path.join(CALL_FIXTURES, 'sample.wav'))
+        e.put(c)
+
+        es().index.assert_called_with(
+            c['created'].strftime(e.index_pattern),
+            e.doc_type,
+            c.data,
+            c.key
+        )
+
+
+class TestCall(unittest.TestCase):
+    def test_no_wavfile(self):
+        """OSError is raised on invalid wav file"""
+        with self.assertRaises(OSError):
+            Call('/this/does/not/exist/file.wav')
+
+    def test_bad_json(self):
+        """ValueError is raised if an invalid callog exists"""
+        with self.assertRaises(ValueError):
+            Call(os.path.join(CALL_FIXTURES, 'bad.wav'))
+
+    def test_malformed_json(self):
+        """ValueError is raised if call log isn't a dict"""
+        with self.assertRaises(ValueError):
+            Call(os.path.join(CALL_FIXTURES, 'mal.wav'))
+
+    def test_good_no_log(self):
+        """Only the default fields are present when there is no callog"""
+        c = Call(os.path.join(CALL_FIXTURES, 'nolog.wav'))
+
+        self.assertEqual(len(c), 1)
+        self.assertEqual(list(c.keys()), ['created'])
+
+    def test_good_log(self):
+        """When a call has a log file it is loaded"""
+        c = Call(os.path.join(CALL_FIXTURES, 'sample.wav'))
+
+        self.assertEqual(c['talkgroup'], 2105)
+
+    def test_read(self):
+        """Calling read returns wav data"""
+        fn = os.path.join(CALL_FIXTURES, 'sample.wav')
+        with open(fn, 'rb') as sauce:
+            c = Call(fn)
+            self.assertEqual(c.read(), sauce.read())
 
 
 class TestGIS(unittest.TestCase):
@@ -35,27 +115,27 @@ class TestGIS(unittest.TestCase):
         """ValueError is raised when file does not contain MultilineStrings"""
         with self.assertRaises(ValueError):
             self.gis.load(
-                os.path.join(FIXTURES_DIR, 'singlepoint/singlepoint.shp')
+                os.path.join(GIS_FIXTURES, 'singlepoint/singlepoint.shp')
             )
 
     def test_malformed_props(self):
         """ValueError is raised when file does not contain MultilineStrings"""
         with self.assertRaises(ValueError):
-            self.gis.load(os.path.join(FIXTURES_DIR, 'lol.geojson'))
+            self.gis.load(os.path.join(GIS_FIXTURES, 'lol.geojson'))
 
     def test_load_good_default_props(self):
         """The correct number of streets and features is returned when
         a valid file is passed
         """
         nums, numf = self.gis.load(
-            os.path.join(FIXTURES_DIR, 'sample.geojson')
+           os.path.join(GIS_FIXTURES, 'sample.geojson')
         )
         self.assertEqual(nums, 3)
         self.assertEqual(numf, 209)
 
     def test_load_street_not_exist(self):
         """None is returned for non-existent streets"""
-        self.gis.load(os.path.join(FIXTURES_DIR, 'sample.geojson'))
+        self.gis.load(os.path.join(GIS_FIXTURES, 'sample.geojson'))
         self.assertIs(self.gis.street('NOT A THING'), None)
 
 
@@ -63,7 +143,7 @@ class TestStreet(unittest.TestCase):
     def setUp(self):
         self.tempdir = tempfile.mkdtemp()
         self.gis = GIS(self.tempdir)
-        self.gis.load(os.path.join(FIXTURES_DIR, 'sample.geojson'))
+        self.gis.load(os.path.join(GIS_FIXTURES, 'sample.geojson'))
 
     def tearDown(self):
         shutil.rmtree(self.tempdir, ignore_errors=True)

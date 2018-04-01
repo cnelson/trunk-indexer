@@ -5,6 +5,8 @@ from colorama import init, Fore, Style
 
 from trunkindexer.gis import GIS
 
+from trunkindexer.storage import Elasticsearch, Call
+
 
 def make_parser():
     """Create a configured argparser
@@ -65,6 +67,15 @@ def make_parser():
         help="Street Centerline GIS data in geojson format",
     )
 
+    index = subparsers.add_parser(
+        'index',
+        help="Add call to elasticseatrch"
+    )
+    index.add_argument(
+        'wavfile',
+        help="Path to recording"
+    )
+
     address = subparsers.add_parser(
         'address',
         help="Get location from street address"
@@ -122,6 +133,9 @@ def main(parser):
                 + Fore.CYAN + str(elapsed_time)
                 + Style.RESET_ALL + " seconds."
             )
+        elif args.command == "index":
+            e = Elasticsearch([args.elasticsearch])
+            e.put(Call(args.wavfile))
         elif args.command == "address":
             s = gis.street(args.name)
             if s is None:

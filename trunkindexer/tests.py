@@ -210,3 +210,29 @@ class TestStreet(unittest.TestCase):
 
         self.assertAlmostEqual(p.x, -122.2819379842289)
         self.assertAlmostEqual(p.y, 37.87041056265982)
+
+    def test_stt_name(self):
+        cases = {
+            '51st': 'FIFTY FIRST',
+            '52nd': 'FIFTY SECOND',
+            '53rd': 'FIFTY THIRD',
+            '54th': 'FIFTY FOURTH',
+            '55th': 'FIFTY FIFTH',
+            '56th': 'FIFTY SIXTH',
+            '57th': 'FIFTY SEVENTH',
+            '58th': 'FIFTY EIGHTH',
+            '59th': 'FIFTY NINETH',
+            '60th': 'SIXTIETH',
+            '61st': 'SIXTY FIRST',
+            '64th': 'SIXTY FOURTH',
+            'SIXTY-FIFTH': 'SIXTY FIFTH'
+        }
+        for inname, outname in cases.items():
+            self.assertEqual(outname, self.gis._stt_street_name(inname))
+
+    def test_streets(self):
+        """A list of streets is returned when calling streets()"""
+        self.assertEqual(
+            ['ASHBY', 'SACRAMENTO', 'UNIVERSITY'],
+            sorted(self.gis.streets())
+        )

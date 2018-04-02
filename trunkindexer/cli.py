@@ -133,9 +133,22 @@ def main(parser):
                 + Fore.CYAN + str(elapsed_time)
                 + Style.RESET_ALL + " seconds."
             )
+
         elif args.command == "index":
+            c = Call(args.wavfile)
             e = Elasticsearch([args.elasticsearch])
-            e.put(Call(args.wavfile))
+            e.put(c)
+
+            # if args.transcribe:
+            #     # TODO: pykaldi
+            #     c['transcript'] = "3030 ACTON"
+
+            #     for location in Parser(c['transcript']):
+            #         print(location)
+            #         c['location'] = location
+
+            #     e.put(c)
+
         elif args.command == "address":
             s = gis.street(args.name)
             if s is None:

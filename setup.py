@@ -26,6 +26,7 @@ setup(
         'colorama',
         'elasticsearch',
         'fiona',
+        'lark-parser',
         "pytz",
         'shapely',
         "tzlocal"

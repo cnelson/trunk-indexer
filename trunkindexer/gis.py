@@ -1,3 +1,4 @@
+import glob
 import os
 import shutil
 
@@ -97,7 +98,7 @@ class Street(object):
         return None
 
     def intersection(self, other_street):
-        """Returns the locatoin of where this street intersects with another
+        """Returns the location of where this street intersects with another
 
         Args: other_street (Street): The street to check
 
@@ -291,6 +292,20 @@ class GIS(object):
         source.close()
         return num_streets, num_features
 
+    def streets(self):
+        """Return a list of streets in the data directory
+
+        Returns:
+            list[str, str, ...] - The list of streetnames
+
+        """
+
+        return [
+            os.path.basename(x) for x in glob.glob(
+                os.path.join(self.gisdir, '?/*')
+            )
+        ]
+
     def _street_filename(self, name):
         """Returns the filename for a given street file.
 
@@ -304,6 +319,7 @@ class GIS(object):
         """
         name = name.upper()
 
+        # if this is changed, adjust the glob in the function above to match
         return os.path.join(
             self.gisdir,
             name[0],
@@ -325,6 +341,61 @@ class GIS(object):
         name = name.strip()
         name = name.replace('-', ' ')
         name = name.replace('/', ' ')
+
+        single = {
+            '1st': 'first',
+            '2nd': 'second',
+            '3rd': 'third',
+            '4th': 'fourth',
+            '5th': 'fifth',
+            '6th': 'sixth',
+            '7th': 'seventh',
+            '8th': 'eighth',
+            '9th': 'nineth',
+        }
+
+        solo = {
+            '10th': 'tenth',
+            '11th': 'eleventh',
+            '12th': 'twelveth',
+            '13th': 'thirteenth',
+            '14th': 'fourteenth',
+            '15th': 'fifteenth',
+            '16th': 'sixteenth',
+            '17th': 'seventeenth',
+            '18th': 'eighteenth',
+            '19th': 'nineteenth',
+            '20th': 'twentieth',
+            '30th': 'thirtieth',
+            '40th': 'fortieth',
+            '50th': 'fiftieth',
+            '60th': 'sixtieth',
+            '70th': 'seventieth',
+            '80th': 'eightieth',
+            '90th': 'ninetieth',
+        }
+
+        multi = {
+            '2': 'twenty',
+            '3': 'thirty',
+            '4': 'fourty',
+            '5': 'fifty',
+            '6': 'sixty',
+            '7': 'seventy',
+            '8': 'eighty',
+            '9': 'ninety',
+        }
+
+        name = name.lower()
+        for kk, vv in solo.items():
+            name = name.replace(kk, vv)
+
+        for kk, vv in multi.items():
+            for kkk, vvv in single.items():
+                name = name.replace(kk+kkk, vv+' '+vvv)
+
+        for kk, vv in single.items():
+            name = name.replace(kk, vv)
 
         return name.upper()
 

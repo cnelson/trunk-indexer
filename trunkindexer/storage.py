@@ -97,7 +97,10 @@ class Call(UserDict, io.FileIO):
 
         # if this looks like a trunk recorder formatted path
         # grab the shortName out of the path
-        m = re.search(r'(\w+)\/\d{4}\/\d+\/\d+\/'+self.key+'$', basename)
+        m = re.search(
+            r'(\w+)\/\d{4}\/\d+\/\d+\/'+re.escape(self.key)+'$',
+            basename
+        )
         if m is not None:
             self.data['system'] = m.groups()[0]
 

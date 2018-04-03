@@ -177,7 +177,11 @@ def main(parser, args=[]):
         parser.error(exc)
 
 
-if __name__ == "__main__":
+def entrypoint():
     init()
     parser = make_parser()
     main(parser, sys.argv[1:])
+
+
+if __name__ == "__main__":
+    entrypoint()

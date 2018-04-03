@@ -36,7 +36,7 @@ setup(
 
     entry_points={
         'console_scripts': [
-            'trunkindexer = trunkindexer.cli:main'
+            'trunkindexer = trunkindexer.cli:entrypoint'
         ]
     }
 )

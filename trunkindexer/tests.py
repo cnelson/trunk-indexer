@@ -8,6 +8,7 @@ from elasticsearch import ElasticsearchException
 
 from trunkindexer.gis import GIS, Street
 from trunkindexer.storage import Call, Elasticsearch
+from trunkindexer.stt import Parser
 
 GIS_FIXTURES = os.path.join(os.path.dirname(__file__), 'fixtures', 'gis')
 CALL_FIXTURES = os.path.join(os.path.dirname(__file__), 'fixtures', 'calls')
@@ -16,7 +17,7 @@ CALL_FIXTURES = os.path.join(os.path.dirname(__file__), 'fixtures', 'calls')
 @patch('trunkindexer.storage.elasticsearch.Elasticsearch')
 class TestElastic(unittest.TestCase):
 
-    def test_elastic_bad(self, es):
+    def test_bad(self, es):
         """RuntimeError is raised if elastic cannot be reached"""
 
         es.side_effect = ElasticsearchException('Lol')
@@ -24,7 +25,7 @@ class TestElastic(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             Elasticsearch(['foo'])
 
-    def test_elastic_bad_put(self, es):
+    def test_bad_put(self, es):
         """RuntimeError is raised if elastic cannot store a Document"""
 
         es().index.side_effect = ElasticsearchException('Lol')
@@ -34,7 +35,35 @@ class TestElastic(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             e.put(Call(os.path.join(CALL_FIXTURES, 'sample.wav')))
 
-    def test_elastic_good_put(self, es):
+    def test_dupe_index_put(self, es):
+        """duplicate index errors are ignored"""
+        exc = ElasticsearchException('dupe index')
+        exc.info = {
+            'error': {'type': 'resource_already_exists_exception'}
+        }
+
+        es().indices.create.side_effect = exc
+
+        e = Elasticsearch(['foo'])
+
+        # no exception should be rasied
+        e.put(Call(os.path.join(CALL_FIXTURES, 'sample.wav')))
+
+    def test_index_create_fail(self, es):
+        """other index errors are caught"""
+        exc = ElasticsearchException('other index error')
+        exc.info = {
+            'error': {'type': 'other_error'}
+        }
+
+        es().indices.create.side_effect = exc
+
+        e = Elasticsearch(['foo'])
+
+        with self.assertRaises(RuntimeError):
+            e.put(Call(os.path.join(CALL_FIXTURES, 'sample.wav')))
+
+    def test_good_put(self, es):
         """Valid Documents are stored"""
 
         es().indices.side_effect = ElasticsearchException('Lol')
@@ -235,4 +264,56 @@ class TestStreet(unittest.TestCase):
         self.assertEqual(
             ['ASHBY', 'SACRAMENTO', 'UNIVERSITY'],
             sorted(self.gis.streets())
+        )
+
+
+class TestParser(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.mkdtemp()
+        gis = GIS(self.tempdir)
+        gis.load(os.path.join(GIS_FIXTURES, 'sample.geojson'))
+
+        self.parser = Parser(self.tempdir)
+
+    def tearDown(self):
+        shutil.rmtree(self.tempdir, ignore_errors=True)
+
+    def test_address_formats(self):
+        """A variety of address formats can be decoded"""
+        supported = [
+            ('one two three university', ['123 UNIVERSITY']),
+            ('twenty six eighteen ashby', ['2618 ASHBY']),
+            ('two hundred university', ['200 UNIVERSITY']),
+            ('nine hundred ashby', ['900 ASHBY']),
+            ('twenty two hundred ashby', ['2200 ASHBY']),
+            ('three to oh for sacramento', ['3204 SACRAMENTO']),
+            ('twenty twenty sacramento', ['2020 SACRAMENTO']),
+            ('university and sacramento', ['UNIVERSITY/SACRAMENTO']),
+            # adrdresses are scored higher than intersections
+            (
+                'university and sacramento thats fifteen hundred university',
+                ['1500 UNIVERSITY', 'UNIVERSITY/SACRAMENTO']
+            ),
+            # all "maybe" digits shouldn't return an address
+            ('to to to sacramento', []),
+            # streets that don't cross, don't return
+            ('university and ashby', []),
+
+        ]
+
+        for val, output in supported:
+            with self.subTest(val):
+                self.assertEqual(
+                    [x.value for x in self.parser.locations(val)],
+                    output
+                )
+
+    def test_replace(self):
+        """replace() updates txt with the found location"""
+        val = "yo dogg we at nineteen ninety nine university lets party"
+        loc = self.parser.locations(val)[0]
+
+        self.assertEqual(
+            loc.replace(val),
+            'yo dogg we at 1999 UNIVERSITY lets party'
         )

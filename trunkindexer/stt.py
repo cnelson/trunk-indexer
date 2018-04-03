@@ -106,9 +106,13 @@ class Address(Transformer):
             val = SPOKEN_TO_INT[num.value]
 
             # stand alone numbers like 'thirteen'
-            # don't need to do anything to these
             if num.type == "NUMBER":
-                pass
+                try:
+                    ahead = numbers[i+1]
+                    if ahead.type == "SUFFIX":
+                        val = val * SPOKEN_TO_INT[ahead.value]
+                except IndexError:
+                    pass
 
             # numbers this might be added to a digit,
             # like 'twenty' in 'twenty two' -> 22
@@ -130,12 +134,8 @@ class Address(Transformer):
             elif num.type == "DIGIT":
                 # if the number before is a prefix, then we already
                 # "used" this digit above
-                try:
-                    back = numbers[i-1]
-                    if back.type == "PREFIX":
+                if i > 0 and numbers[i-1].type == "PREFIX":
                         continue
-                except IndexError:
-                    pass
 
                 # if the number after is a suffix, and there's no prefix
                 # before then multiple.  ex: "three hundred"
@@ -150,12 +150,8 @@ class Address(Transformer):
             elif num.type == "SUFFIX":
                 # if we are a suffix, but there's no digit before us
                 # then return unmodified
-                try:
-                    back = numbers[i-1]
-                    if back.type == "DIGIT":
-                        continue
-                except IndexError:
-                    pass
+                if i > 0 and numbers[i-1].type in ["NUMBER", "DIGIT"]:
+                    continue
 
             street_number.append(val)
 
@@ -361,6 +357,9 @@ class Parser(object):
 
             # convert it into queryable
             addr = Address().transform(tree)[0]
+            if addr is None:
+                continue
+
             if addr[0] == 'addr':
                 s = self.gis.street(addr[2])
                 if s is not None:
@@ -390,4 +389,8 @@ class Parser(object):
                 ll.add_postion(spos, epos)
 
         # return all matches sorted by score
-        return sorted(locations.values(), key=lambda x: x.score())
+        return sorted(
+            locations.values(),
+            key=lambda x: x.score(),
+            reverse=True
+        )

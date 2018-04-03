@@ -1,11 +1,12 @@
 import argparse
+import sys
 import time
 
 from colorama import init, Fore, Style
 
 from trunkindexer.gis import GIS
-
-from trunkindexer.storage import Elasticsearch, Call
+from trunkindexer.storage import Elasticsearch, Call, load_talkgroups
+from trunkindexer.stt import Parser
 
 
 def make_parser():
@@ -66,6 +67,13 @@ def make_parser():
         'gisfile',
         help="Street Centerline GIS data in geojson format",
     )
+    load.add_argument(
+        'tgfile',
+        help="Talkgroups CSV file. Must have a header row, and a column"
+             " named DEC",
+        nargs='?',
+        default=None
+    )
 
     index = subparsers.add_parser(
         'index',
@@ -75,130 +83,92 @@ def make_parser():
         'wavfile',
         help="Path to recording"
     )
-
-    address = subparsers.add_parser(
-        'address',
-        help="Get location from street address"
+    index.add_argument(
+        '--baseurl',
+        help="The base url where this wav file is available",
+        default=None
     )
-    address.add_argument(
-        'number',
-        type=int,
-        help="Street Number"
-    )
-    address.add_argument(
-        'name',
-        help="Street Name"
-    )
-
-    intersection = subparsers.add_parser(
-        'intersection',
-        help="Get location from street intersection"
-    )
-    intersection.add_argument(
-        'street1',
-        help="First Street"
-    )
-    intersection.add_argument(
-        'street2',
-        help="Second Street"
+    index.add_argument(
+        '--transcript',
+        default=None,
+        help='Transcript of recording.'
     )
 
     return parser
 
 
-def main(parser):
-    args = parser.parse_args()
-
+def load(args):
+    """Load geojson and talkgroups data into a datadir"""
     gis = GIS(args.data_dir)
 
+    t = time.process_time()
+    num_streets, num_features = gis.load(
+        args.gisfile,
+        args.street_name,
+        args.fromr,
+        args.tor,
+        args.froml,
+        args.tol
+    )
+    elapsed_time = time.process_time() - t
+
+    print(
+        Style.RESET_ALL + "Loaded "
+        + Fore.GREEN + str(num_streets)
+        + Style.RESET_ALL + " streets / "
+        + Fore.GREEN + str(num_features)
+        + Style.RESET_ALL + " features in "
+        + Fore.CYAN + str(elapsed_time)
+        + Style.RESET_ALL + " seconds."
+    )
+
+    if args.tgfile is not None:
+        t = time.process_time()
+        rows, cols = load_talkgroups(args.data_dir, args.tgfile)
+        elapsed_time = time.process_time() - t
+        print(
+            Style.RESET_ALL + "Loaded "
+            + Fore.GREEN + str(rows)
+            + Style.RESET_ALL + " talkgroups / "
+            + Fore.GREEN + str(rows*cols)
+            + Style.RESET_ALL + " features in "
+            + Fore.CYAN + str(elapsed_time)
+            + Style.RESET_ALL + " seconds."
+        )
+
+
+def index(args):
+    """Add a record to elastic search"""
+    c = Call(args.wavfile, baseurl=args.baseurl, datadir=args.data_dir)
+    e = Elasticsearch([args.elasticsearch])
+    e.put(c)
+
+    if args.transcript:
+        c['transcript'] = args.transcript
+
+        p = Parser(args.data_dir)
+        locs = p.locations(args.transcript)
+
+        try:
+            c['detected_address'] = locs[0].value
+            c['location'] = '{}, {}'.format(
+                locs[0].point.y,
+                locs[0].point.x
+            )
+        except IndexError:
+            pass
+        e.put(c)
+
+    return c
+
+
+def main(parser, args=[]):
+    args = parser.parse_args(args)
     try:
         if args.command == "load":
-            t = time.process_time()
-            num_streets, num_features = gis.load(
-                args.gisfile,
-                args.street_name,
-                args.fromr,
-                args.tor,
-                args.froml,
-                args.tol,
-            )
-            elapsed_time = time.process_time() - t
-
-            print(
-                Style.RESET_ALL + "Loaded "
-                + Fore.GREEN + str(num_streets)
-                + Style.RESET_ALL + " streets / "
-                + Fore.GREEN + str(num_features)
-                + Style.RESET_ALL + " features in "
-                + Fore.CYAN + str(elapsed_time)
-                + Style.RESET_ALL + " seconds."
-            )
-
+            load(args)
         elif args.command == "index":
-            c = Call(args.wavfile)
-            e = Elasticsearch([args.elasticsearch])
-            e.put(c)
-
-            # if args.transcribe:
-            #     # TODO: pykaldi
-            #     c['transcript'] = "3030 ACTON"
-
-            #     for location in Parser(c['transcript']):
-            #         print(location)
-            #         c['location'] = location
-
-            #     e.put(c)
-
-        elif args.command == "address":
-            s = gis.street(args.name)
-            if s is None:
-                parser.error("{} is not a valid street.".format(
-                    args.name
-                ))
-
-            p = s.number_to_location(args.number)
-            if p is None:
-                parser.error("{} {} is not a valid address.".format(
-                    args.number, args.name
-                ))
-
-            print(
-                Style.RESET_ALL + "{} {}: ".format(args.number, args.name)
-                + Fore.CYAN + str(p.y)
-                + Style.RESET_ALL + Style.DIM + ", "
-                + Style.RESET_ALL + Fore.CYAN + str(p.x)
-                + Style.RESET_ALL
-            )
-        elif args.command == "intersection":
-            s1 = gis.street(args.street1)
-            s2 = gis.street(args.street2)
-
-            if s1 is None:
-                parser.error("{} is not a valid street.".format(
-                    args.street1
-                ))
-
-            if s2 is None:
-                parser.error("{} is not a valid street.".format(
-                    args.street2
-                ))
-
-            p = s1.intersection(s2)
-
-            if p is None:
-                parser.error("{} and {} do not intersect.".format(
-                    args.street1, args.street2
-                ))
-
-            print(
-                Style.RESET_ALL + "{} and {}: ".format(
-                    args.street1, args.street2
-                )
-                + Fore.CYAN + str(p.y)
-                + Style.RESET_ALL + Style.DIM + ", "
-                + Style.RESET_ALL + Fore.CYAN + str(p.x)
-                + Style.RESET_ALL
-            )
+            index(args)
         else:
             raise RuntimeError("Unknown command: {}".format(args.command))
     except (ValueError, OSError) as exc:
@@ -206,10 +176,8 @@ def main(parser):
     except (RuntimeError) as exc:
         parser.error(exc)
 
-    exit(0)
-
 
 if __name__ == "__main__":
     init()
     parser = make_parser()
-    main(parser)
+    main(parser, sys.argv[1:])

@@ -1,17 +1,173 @@
-from unittest.mock import patch
+import datetime
 import os
+from pathlib import Path
 import shutil
 import tempfile
 import unittest
+from unittest.mock import patch, Mock
 
 from elasticsearch import ElasticsearchException
 
+from trunkindexer import cli
 from trunkindexer.gis import GIS, Street
-from trunkindexer.storage import Call, Elasticsearch
+from trunkindexer.storage import Call, Elasticsearch, load_talkgroups
 from trunkindexer.stt import Parser
 
 GIS_FIXTURES = os.path.join(os.path.dirname(__file__), 'fixtures', 'gis')
 CALL_FIXTURES = os.path.join(os.path.dirname(__file__), 'fixtures', 'calls')
+TG_FIXTURES = os.path.join(os.path.dirname(__file__), 'fixtures', 'talkgroups')
+
+
+class TestCLI(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.mkdtemp()
+        self.gis = GIS(self.tempdir)
+        self.gis.load(os.path.join(GIS_FIXTURES, 'sample.geojson'))
+
+    def tearDown(self):
+        shutil.rmtree(self.tempdir, ignore_errors=True)
+
+    def test_main_unknown_command(self):
+        """An error is raised if an unknown command is provided"""
+
+        fakeparser = Mock()
+        fakeparser.parse_args().command = 'lol'
+
+        cli.main(fakeparser)
+
+        fakeparser.error.assert_called_once()
+
+    @patch('trunkindexer.cli.load')
+    @patch('trunkindexer.cli.index')
+    def test_main_known_command(self, imock, lmock):
+        """The corresponding function is called for valid commands"""
+
+        cli.main(cli.make_parser(), ['load', '/path/to/gis'])
+        lmock.assert_called_once()
+        imock.assert_not_called()
+
+        lmock.reset_mock()
+
+        cli.main(cli.make_parser(), ['index', '/path/to/gis'])
+        imock.assert_called_once()
+        lmock.assert_not_called()
+
+    @patch('trunkindexer.cli.load')
+    def test_main_exceptions(self, lmock):
+        """If the function raises known exceptions, they are handled"""
+
+        lmock.side_effect = ValueError('bad news')
+
+        fakeparser = Mock()
+        fakeparser.parse_args().command = 'load'
+
+        cli.main(fakeparser)
+        fakeparser.error.assert_called_with('Unable to load: bad news')
+
+        lmock.side_effect = OSError('bad news')
+        cli.main(fakeparser)
+        fakeparser.error.assert_called_with('Unable to load: bad news')
+
+        lmock.side_effect = RuntimeError('a thing')
+        cli.main(fakeparser)
+        fakeparser.error.assert_called_with(lmock.side_effect)
+
+        with self.assertRaises(KeyError):
+            lmock.side_effect = KeyError()
+            cli.main(fakeparser)
+
+    @patch('trunkindexer.cli.load_talkgroups')
+    @patch('trunkindexer.cli.GIS')
+    def test_load_func_no_tg(self, gmock, tmock):
+        """Load is called with the expected parameters"""
+        gmock().load.return_value = (6, 9)
+
+        parser = cli.make_parser()
+        args = parser.parse_args(['-d', self.tempdir, 'load', '/a/gis.file'])
+        cli.load(args)
+
+        gmock.assert_called_with(self.tempdir)
+        gmock().load.assert_called_with(
+            args.gisfile,
+            args.street_name,
+            args.fromr,
+            args.tor,
+            args.froml,
+            args.tol
+        )
+
+        tmock.assert_not_called()
+
+    @patch('trunkindexer.cli.load_talkgroups')
+    @patch('trunkindexer.cli.GIS')
+    def test_load_func_tg(self, gmock, tmock):
+        """Load is called with the expected parameters with talkgroups"""
+        gmock().load.return_value = (6, 9)
+        tmock.return_value = (6, 9)
+
+        parser = cli.make_parser()
+        args = parser.parse_args(
+            ['-d', self.tempdir, 'load', '/a/gis.file', '/a/tg.csv']
+        )
+        cli.load(args)
+
+        gmock.assert_called_with(self.tempdir)
+        tmock.assert_called_with(self.tempdir, '/a/tg.csv')
+
+    @patch('trunkindexer.cli.Elasticsearch')
+    def test_index_func_no_transcript(self, emock):
+        """Index is called with the expected paramters with no transcript"""
+        parser = cli.make_parser()
+        args = parser.parse_args([
+            '-d',
+            self.tempdir,
+            'index',
+            os.path.join(CALL_FIXTURES, 'sample.wav')
+        ])
+        c = cli.index(args)
+
+        emock().put.assert_called_once()
+        self.assertNotIn('transcript', c)
+        self.assertNotIn('location', c)
+        self.assertNotIn('detected_address', c)
+
+    @patch('trunkindexer.cli.Elasticsearch')
+    def test_index_func_transcript_good(self, emock):
+        """Index is called with the expected paramters with a transcript"""
+        parser = cli.make_parser()
+        args = parser.parse_args([
+            '-d',
+            self.tempdir,
+            'index',
+            os.path.join(CALL_FIXTURES, 'sample.wav'),
+            '--transcript',
+            'nineteen ninety nine university'
+        ])
+        c = cli.index(args)
+
+        self.assertTrue(emock().put.call_count, 2)
+        self.assertIn('transcript', c)
+        self.assertIn('location', c)
+        self.assertEqual(c['detected_address'], '1999 UNIVERSITY')
+
+    @patch('trunkindexer.cli.Elasticsearch')
+    def test_index_func_transcript_bad(self, emock):
+        """Index is called with the expected paramters with a transcript"""
+        parser = cli.make_parser()
+        args = parser.parse_args([
+            '-d',
+            self.tempdir,
+            'index',
+            os.path.join(CALL_FIXTURES, 'sample.wav'),
+            '--transcript',
+            'no address here'
+        ])
+        c = cli.index(args)
+
+        self.assertTrue(emock().put.call_count, 2)
+        self.assertIn('transcript', c)
+        self.assertNotIn('location', c)
+        self.assertNotIn('detected_address', c)
 
 
 @patch('trunkindexer.storage.elasticsearch.Elasticsearch')
@@ -100,13 +256,21 @@ class TestCall(unittest.TestCase):
         """Only the default fields are present when there is no callog"""
         c = Call(os.path.join(CALL_FIXTURES, 'nolog.wav'))
 
-        self.assertEqual(len(c), 1)
-        self.assertEqual(list(c.keys()), ['created'])
+        self.assertEqual(len(c), 2)
+        self.assertEqual(list(c.keys()), ['created', 'url'])
 
     def test_good_log(self):
         """When a call has a log file it is loaded"""
         c = Call(os.path.join(CALL_FIXTURES, 'sample.wav'))
 
+        self.assertEqual(c['talkgroup'], 2105)
+
+        # these fields are generated from the call log
+        self.assertEqual(c['duration'], 10)
+        self.assertTrue(isinstance(c['start_time'], datetime.datetime))
+
+        # path is wrong, so no system extracting
+        self.assertNotIn('system', c)
         self.assertEqual(c['talkgroup'], 2105)
 
     def test_read(self):
@@ -115,6 +279,41 @@ class TestCall(unittest.TestCase):
         with open(fn, 'rb') as sauce:
             c = Call(fn)
             self.assertEqual(c.read(), sauce.read())
+
+    def test_tr_dir_to_system(self):
+        """If the file is in a trunk-recorder path, extract the shortname"""
+        c = Call(os.path.join(CALL_FIXTURES, 'excellent/2012/6/9/sample.wav'))
+        self.assertEqual(c['system'], 'excellent')
+
+    def test_baseurl(self):
+        """base url is used if the path is a trunk recorder path"""
+
+        c = Call(os.path.join(CALL_FIXTURES, 'sample.wav'))
+
+        self.assertEqual(
+            c['url'],
+            'file://'+str(Path(os.path.join(CALL_FIXTURES, 'sample.wav')))
+        )
+
+        c = Call(
+            os.path.join(CALL_FIXTURES, 'sample.wav'),
+            baseurl='http://this.is.ignored'
+        )
+
+        self.assertEqual(
+            c['url'],
+            'file://'+str(Path(os.path.join(CALL_FIXTURES, 'sample.wav')))
+        )
+
+        c = Call(
+            os.path.join(CALL_FIXTURES, 'excellent/2012/6/9/sample.wav'),
+            baseurl='http://this.is.used/'
+        )
+
+        self.assertEqual(
+            c['url'],
+            'http://this.is.used/excellent/2012/6/9/sample.wav'
+        )
 
 
 class TestGIS(unittest.TestCase):
@@ -241,6 +440,7 @@ class TestStreet(unittest.TestCase):
         self.assertAlmostEqual(p.y, 37.87041056265982)
 
     def test_stt_name(self):
+        "Names are covered to spoken english"
         cases = {
             '51st': 'FIFTY FIRST',
             '52nd': 'FIFTY SECOND',
@@ -265,6 +465,58 @@ class TestStreet(unittest.TestCase):
             ['ASHBY', 'SACRAMENTO', 'UNIVERSITY'],
             sorted(self.gis.streets())
         )
+
+
+class TestTalkGroups(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tempdir, ignore_errors=True)
+
+    def test_load_talkgroups_bad(self):
+        """OSError is raised if a bad talk group file is loaded"""
+
+        with self.assertRaises(OSError):
+            load_talkgroups(self.tempdir, '/this/file/does/not/exist')
+
+    def test_load_talkgroups_malformed(self):
+        """ValueError is raised when the talkgroup csv is missing fields"""
+
+        with self.assertRaises(ValueError):
+            load_talkgroups(self.tempdir, os.path.join(TG_FIXTURES, 'bad.csv'))
+
+    def test_load_talkgroups_good(self):
+        """Talkgroup csv will be parsed and cached to disk"""
+        r, c = load_talkgroups(
+                self.tempdir,
+                os.path.join(TG_FIXTURES, 'sample.csv')
+            )
+        self.assertEqual(r, 2)
+        self.assertEqual(c, 7)
+
+    def test_talkgroups_call(self):
+        """Extended talkgroup info is available when datadir is provided"""
+        load_talkgroups(
+            self.tempdir,
+            os.path.join(TG_FIXTURES, 'sample.csv')
+        )
+
+        c = Call(
+            os.path.join(CALL_FIXTURES, 'sample.wav'),
+            datadir=self.tempdir
+        )
+
+        self.assertEqual(c['talkgroup']['DEC'], 2105)
+        self.assertEqual(c['talkgroup']['Description'], 'Fire Dispatch 1')
+
+    def test_missing_talkgroups_ignored(self):
+        """if we ahve a data dir, but no talkgroup file, that's cool"""
+        c = Call(
+            os.path.join(CALL_FIXTURES, 'sample.wav'),
+            datadir=self.tempdir
+        )
+        self.assertEqual(c['talkgroup'], 2105)
 
 
 class TestParser(unittest.TestCase):

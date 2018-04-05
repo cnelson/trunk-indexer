@@ -1,4 +1,32 @@
-from setuptools import setup, find_packages
+from setuptools import setup, find_packages, Extension
+
+import os
+
+try:
+    KALDI_HOME = os.environ['KALDI_HOME']
+except KeyError:
+    print(
+        'The environment variable KALDI_HOME must be set to where '
+        'kaldi is located'
+    )
+    raise SystemExit
+
+
+kaldi = Extension(
+        'trunkindexer.kaldi',
+        sources=['trunkindexer/kaldi.cc'],
+        include_dirs=[
+            os.path.join(KALDI_HOME, 'src'),
+            os.path.join(KALDI_HOME, 'tools/openfst/include')
+        ],
+        extra_objects=[
+            os.path.join(KALDI_HOME, 'src/online2/libkaldi-online2.so')
+        ],
+        runtime_library_dirs=[
+            os.path.join(KALDI_HOME, 'src/lib')
+        ],
+        extra_compile_args=['-w']  # fuuuu openfst
+)
 
 setup(
     name='trunkindexer',
@@ -38,5 +66,6 @@ setup(
         'console_scripts': [
             'trunkindexer = trunkindexer.cli:entrypoint'
         ]
-    }
+    },
+    ext_modules=[kaldi]
 )

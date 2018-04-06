@@ -12,6 +12,8 @@ import elasticsearch
 import pytz
 from tzlocal import get_localzone
 
+from trunkindexer import kaldi
+
 TGPATH = 'talkgroups/talkgroups.json'
 
 
@@ -95,6 +97,8 @@ class Call(UserDict, io.FileIO):
 
         self.key = os.path.basename(basename)
 
+        self.datadir = datadir
+
         # if this looks like a trunk recorder formatted path
         # grab the shortName out of the path
         m = re.search(
@@ -141,6 +145,25 @@ class Call(UserDict, io.FileIO):
             except OSError:
                 # ignore missing talkgroups file
                 pass
+
+    def transcribe(self):
+        """Use speech to text to transcribe a call
+
+        Returns:
+            str: The transcription
+
+        Raises:
+            RuntimeError: Could not transcribe audio
+        """
+        if self.datadir:
+            self.data['transcript'] = kaldi.decode(
+                    self.name,
+                    os.path.join(self.datadir, 'stt')
+            )
+
+            return self.data['transcript']
+        else:
+            raise RuntimeError("datadir not configured")
 
     def __del__(self):
         self.close()

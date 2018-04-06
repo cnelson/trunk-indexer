@@ -26,6 +26,7 @@ void trap(const kaldi::LogMessageEnvelope &envelope, const char *message) {
 }
 
 // basic kaldi implmementation mostly copied / pasted from examples
+// this is more or less online2-wav-nnet3-latgen-faster
 // TODO: de 10x-ify this.
 std::string basic(std::string wavfile, std::string datadir) {
     using namespace kaldi;

@@ -115,8 +115,8 @@ class TestCLI(unittest.TestCase):
         tmock.assert_called_with(self.tempdir, '/a/tg.csv')
 
     @patch('trunkindexer.cli.Elasticsearch')
-    def test_index_func_no_transcript(self, emock):
-        """Index is called with the expected paramters with no transcript"""
+    def test_index_func_no_transcribe(self, emock):
+        """Index is called with the expected paramters with no transcribe"""
         parser = cli.make_parser()
         args = parser.parse_args([
             '-d',
@@ -131,17 +131,19 @@ class TestCLI(unittest.TestCase):
         self.assertNotIn('location', c)
         self.assertNotIn('detected_address', c)
 
+    @patch('trunkindexer.storage.kaldi')
     @patch('trunkindexer.cli.Elasticsearch')
-    def test_index_func_transcript_good(self, emock):
-        """Index is called with the expected paramters with a transcript"""
+    def test_index_func_transcribe_good(self, emock, kmock):
+        """Index is called with the expected paramters with a transcribe"""
+        kmock.decode.return_value = 'nineteen ninety nine university'
+
         parser = cli.make_parser()
         args = parser.parse_args([
             '-d',
             self.tempdir,
             'index',
             os.path.join(CALL_FIXTURES, 'sample.wav'),
-            '--transcript',
-            'nineteen ninety nine university'
+            '--transcribe'
         ])
         c = cli.index(args)
 
@@ -150,17 +152,19 @@ class TestCLI(unittest.TestCase):
         self.assertIn('location', c)
         self.assertEqual(c['detected_address'], '1999 UNIVERSITY')
 
+    @patch('trunkindexer.storage.kaldi')
     @patch('trunkindexer.cli.Elasticsearch')
-    def test_index_func_transcript_bad(self, emock):
-        """Index is called with the expected paramters with a transcript"""
+    def test_index_func_transcribe_bad(self, emock, kmock):
+        """Index is called with the expected paramters with a transcribe"""
+        kmock.decode.return_value = 'no address here'
+
         parser = cli.make_parser()
         args = parser.parse_args([
             '-d',
             self.tempdir,
             'index',
             os.path.join(CALL_FIXTURES, 'sample.wav'),
-            '--transcript',
-            'no address here'
+            '--transcribe'
         ])
         c = cli.index(args)
 
@@ -314,6 +318,30 @@ class TestCall(unittest.TestCase):
             c['url'],
             'http://this.is.used/excellent/2012/6/9/sample.wav'
         )
+
+    def test_transcribe_no_data(self):
+        """Runtime Error is raised with no data dir"""
+        with self.assertRaises(RuntimeError):
+            c = Call(os.path.join(CALL_FIXTURES, 'sample.wav'))
+            c.transcribe()
+
+    @patch('trunkindexer.storage.kaldi')
+    def test_transcribe_bad(self, kmock):
+        """Runtime error is raised if kaldi fails"""
+        kmock.side_effect = RuntimeError('lol')
+
+        with self.assertRaises(RuntimeError):
+            c = Call(os.path.join(CALL_FIXTURES, 'sample.wav'))
+            c.transcribe()
+
+    @patch('trunkindexer.storage.kaldi')
+    def test_transcribe_good(self, kmock):
+        """Text is returned if kaldi works"""
+        kmock.decode.return_value = 'some decoded text'
+
+        c = Call(os.path.join(CALL_FIXTURES, 'sample.wav'), datadir='/tmp')
+        self.assertEqual(c.transcribe(), 'some decoded text')
+        self.assertEqual(c['transcript'], 'some decoded text')
 
 
 class TestGIS(unittest.TestCase):

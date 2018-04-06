@@ -89,9 +89,10 @@ def make_parser():
         default=None
     )
     index.add_argument(
-        '--transcript',
-        default=None,
-        help='Transcript of recording.'
+        '--transcribe',
+        default=False,
+        action='store_true',
+        help='Use STT to transcribe the recording'
     )
 
     return parser
@@ -143,11 +144,11 @@ def index(args):
     e = Elasticsearch([args.elasticsearch])
     e.put(c)
 
-    if args.transcript:
-        c['transcript'] = args.transcript
+    if args.transcribe:
+        c.transcribe()
 
         p = Parser(args.data_dir)
-        locs = p.locations(args.transcript)
+        locs = p.locations(c['transcript'])
 
         try:
             c['detected_address'] = locs[0].value

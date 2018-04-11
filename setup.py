@@ -1,15 +1,36 @@
-from setuptools import setup, find_packages, Extension
+from setuptools import setup, Extension
 
 import os
+import subprocess
+
 
 try:
     KALDI_HOME = os.environ['KALDI_HOME']
+    with open(os.path.join('trunkindexer', '_config.py'), 'w') as fh:
+        fh.write('KALDI_HOME = """{}"""'.format(KALDI_HOME))
+        fh.write("\n")
 except KeyError:
-    print(
+    raise RuntimeError(
         'The environment variable KALDI_HOME must be set to where '
         'kaldi is located'
     )
-    raise SystemExit
+from setuptools.command.build_py import build_py as _build_py
+
+
+class build_py(_build_py):
+    def run(self):
+
+        # build vendored kenlm so we can package the lmplz tool
+        p = subprocess.Popen(
+            'cmake . && make',
+            shell=True,
+            cwd=os.path.join(
+                os.path.dirname(__file__),
+                'trunkindexer/vendor/kenlm'
+            )
+        )
+        p.wait()
+        return super().run()
 
 
 kaldi = Extension(
@@ -48,16 +69,24 @@ setup(
 
     keywords='trunk-recorder ops25 p25 gnuradio',
 
-    packages=find_packages(),
-
+    packages=['trunkindexer'],
+    setup_requires=[
+        'numpy'  # sequitur-g2p uses numpy in setup.py :(
+    ],
     install_requires=[
         'colorama',
         'elasticsearch',
         'fiona',
         'lark-parser',
-        "pytz",
+        'numpy',
+        'pytz',
         'shapely',
-        "tzlocal"
+        'tzlocal',
+        'sequitur==1.0a1',
+    ],
+    dependency_links=[
+        'https://github.com/cnelson/sequitur-g2p/archive/master.zip'
+        '#egg=sequitur-1.0a1'
     ],
 
     test_suite='trunkindexer.tests',
@@ -67,5 +96,14 @@ setup(
             'trunkindexer = trunkindexer.cli:entrypoint'
         ]
     },
-    ext_modules=[kaldi]
+    ext_modules=[kaldi],
+    cmdclass={'build_py': build_py},
+    package_data={
+        'trunkindexer':
+            [
+                os.path.join(x[0], y).replace('trunkindexer/', '')
+                for x in os.walk('trunkindexer/fixtures') for y in x[2]
+            ] + ['vendor/kenlm/bin/lmplz', 'data/aspire/*']
+    },
+
 )

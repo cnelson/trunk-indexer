@@ -102,3 +102,4 @@ ENV/
 
 # the app
 .cachemoney/
+trunkindexer/_config.py

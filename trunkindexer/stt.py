@@ -1,11 +1,26 @@
+import collections
+import glob
+import gzip
 import os
+import pickle
 import re
+import shutil
+from subprocess import Popen, PIPE
 
 from lark import Lark, Transformer
 from lark.lexer import UnexpectedInput
 from lark.common import ParseError
 
+from sequitur import Translator
+
 from trunkindexer.gis import GIS
+
+try:
+    from trunkindexer._config import KALDI_HOME
+except ImportError:
+    KALDI_HOME = None
+
+KALDI_HOME = os.environ.get('KALDI_HOME', KALDI_HOME)
 
 BASE_GRAMMAR = """
 %import common.WS
@@ -66,6 +81,194 @@ SPOKEN_TO_INT = {
 }
 
 
+class LanguageModel(object):
+    """Wrapper around kaldi tools for building a language model
+
+    Based on:
+        http://kaldi-asr.org/doc/online_decoding.html#online_decoding_nnet2
+        https://chrisearch.wordpress.com/2017/03/11/speech-recognition-using-
+        kaldi-extending-and-using-the-aspire-model/
+    """
+
+    def __init__(self, datadir):
+        """
+            Args:
+            datadir (str): The path to store the model
+        """
+        self.datadir = datadir
+        self.sttdir = os.path.join(self.datadir, 'stt')
+
+        os.makedirs(self.sttdir, exist_ok=True)
+
+        self.sourcedir = os.path.join(
+            os.path.dirname(__file__),
+            'data/aspire'
+        )
+
+        self.lmplz = os.path.join(
+            os.path.dirname(__file__),
+            'vendor/kenlm/bin/lmplz'
+        )
+
+    def update(self, corpus):
+        """Compile a new langauge model with additional words
+
+        Args:
+            corpus list[str, str...]: A list of phrases to add to the model
+
+        """
+        # copy the aspire model to the data directory
+        files = [
+            'final.dubm',
+            'final.ie',
+            'final.mat',
+            'global_cmvn.stats',
+            'extra_questions.txt',
+            'nonsilence_phones.txt',
+            'optional_silence.txt',
+            'silence_phones.txt',
+            'phones.txt'
+        ]
+
+        for fn in files:
+            shutil.copyfile(
+                os.path.join(self.sourcedir, fn),
+                os.path.join(self.sttdir, fn)
+            )
+
+        # broken up into < 100 MB chunks so github will host
+        with open(os.path.join(self.sttdir, 'final.mdl'), 'wb') as fh:
+            for fn in glob.glob(os.path.join(self.sourcedir, 'final.mdl-*')):
+                with open(fn, 'rb') as tmp:
+                    fh.write(tmp.read())
+
+        with open(os.path.join(self.sourcedir, 'cmudict-model'), 'rb') as fh:
+            model = pickle.load(fh, encoding='latin1')
+
+        translator = Translator(model)
+        del model
+
+        # guess pronouncitions
+        with open(os.path.join(self.sttdir, 'words.dic'), 'w') as fh:
+            for word in corpus:
+                word = word.upper()
+                left = tuple(word)
+                try:
+                    result = translator(left)
+                    fh.write("{}\t{}\n".format(word, ' '.join(result)))
+                except RuntimeError:
+                    print("Couldn't translate {}".format(word))
+
+        # trigram language model of street names
+        with open(os.path.join(self.sttdir, 'lm.arpa'), 'wb') as fh:
+            p = Popen([self.lmplz, '-o', '3'], stdout=PIPE, stdin=PIPE)
+            stdout, stderr = p.communicate("\n".join(corpus).encode('utf-8'))
+            fh.write(stdout)
+            p.wait()
+
+        words = collections.OrderedDict()
+        for dic in [
+            os.path.join(self.sourcedir, 'lexicon4_extra.txt'),
+            os.path.join(self.sttdir, 'words.dic')
+        ]:
+            with open(dic, 'r+') as fh:
+                for line in fh:
+                    arr = line.strip().replace("\t", " ").split(" ", 1)
+                    [word, pronunciation] = arr
+                    word = word.lower()
+                    if word not in words:
+                        words[word] = set([pronunciation.lower()])
+                    else:
+                        words[word].add(pronunciation.lower())
+
+        # jank merge of our dict / lm
+        # with original model
+        with open(os.path.join(self.sttdir, 'lexicon.txt'), 'w') as fh:
+            for word in words:
+                for pronunciation in words[word]:
+                    fh.write(word + " " + pronunciation + "\n")
+
+        grams = [[], [], []]
+        for lm in [
+            os.path.join(self.sourcedir, 'lm_unpruned'),
+            os.path.join(self.sttdir, 'lm.arpa')
+        ]:
+            with open(lm, 'r+') as fh:
+                mode = 0
+                for line in fh:
+                    line = line.strip()
+                    if line == "\\1-grams:":
+                        mode = 1
+                    if line == "\\2-grams:":
+                        mode = 2
+                    if line == "\\3-grams:":
+                        mode = 3
+                    arr = line.split(" ")
+                    if mode > 0 and len(arr) > 1:
+                        if mode == 1 or mode == 2:
+                            word = " ".join(arr[2:-1] if mode < 3 else arr[2:])
+                            word = word.lower()
+                        grams[mode - 1].append(line.lower())
+
+        with gzip.open(
+            os.path.join(self.sttdir, 'merged-lm.arpa.gz'),
+            'wb'
+        ) as fh:
+            fh.write(
+                bytes(
+                    u"\\data\\\n" +
+                    u"ngram 1=" + str(len(grams[0])) + "\n"
+                    u"ngram 2=" + str(len(grams[1])) + "\n"
+                    u"ngram 3=" + str(len(grams[2])) + "\n",
+                    'utf-8'
+                )
+            )
+            for i in range(3):
+                fh.write(bytes(u"\n\\" + str(i+1) + u"-grams:\n", 'utf-8'))
+                for g in grams[i]:
+                    fh.write(bytes(g + "\n", 'utf-8'))
+
+            fh.write(bytes(u"\n\\end\\\n", 'utf-8'))
+
+        aspire = os.path.join(KALDI_HOME, 'egs/aspire/s5')
+        p = Popen(
+            [
+                'utils/prepare_lang.sh',
+                '--phone-symbol-table',
+                'exp/tdnn_7b_chain_online/phones.txt',
+                self.sttdir,
+                "<unk>",
+                '/tmp',
+                self.sttdir
+            ],
+            cwd=aspire
+        )
+        p.wait()
+
+        p = Popen(
+            [
+                'utils/format_lm.sh',
+                self.sttdir,
+                os.path.join(self.sttdir, 'merged-lm.arpa.gz'),
+                os.path.join(self.sttdir, 'lexicon.txt'), self.sttdir
+            ],
+            cwd=aspire
+        )
+        p.wait()
+
+        p = Popen(
+            [
+                'utils/mkgraph.sh',
+                '--self-loop-scale',
+                '1.0',
+                self.sttdir,
+                'exp/tdnn_7b_chain_online',
+                self.sttdir
+            ],
+            cwd=aspire
+        )
+
+
 class Address(Transformer):
     """Convert a spoken address into one suitable for searching GIS data"""
 
@@ -73,7 +276,7 @@ class Address(Transformer):
         return args
 
     def addr(self, args):
-        """Transform the numbers in a street address to in
+        """Transform the numbers in a street address to int
 
         twenty nine sixteen => 2916
         """

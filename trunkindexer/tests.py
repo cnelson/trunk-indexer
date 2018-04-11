@@ -597,3 +597,8 @@ class TestParser(unittest.TestCase):
             loc.replace(val),
             'yo dogg we at 1999 UNIVERSITY lets party'
         )
+
+
+if __name__ == '__main__':
+    unittest.main()
+

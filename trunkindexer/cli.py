@@ -6,7 +6,7 @@ from colorama import init, Fore, Style
 
 from trunkindexer.gis import GIS
 from trunkindexer.storage import Elasticsearch, Call, load_talkgroups
-from trunkindexer.stt import Parser
+from trunkindexer.stt import Parser, LanguageModel
 
 
 def make_parser():
@@ -122,6 +122,9 @@ def load(args):
         + Fore.CYAN + str(elapsed_time)
         + Style.RESET_ALL + " seconds."
     )
+
+    lm = LanguageModel(args.data_dir)
+    lm.update(gis.streets())
 
     if args.tgfile is not None:
         t = time.process_time()
